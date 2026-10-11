@@ -26,7 +26,14 @@ runtime files) and inherit every per-server setting in your `lsp/*.lua`
 files — including deliberate choices like rust-analyzer's native
 diagnostics being disabled in favour of bacon-ls.
 
-## Tools (v0.1, read-only)
+## Tools
+
+Read-only intelligence (`broker_status`, `get_*`, `list_*`) plus two
+execution tools (`run_format`, `run_lint`) that run the config's own
+pipelines inside the editor. Formatting is applied to the brokered
+editor's buffer and returned as text — the file on disk is never
+written (`written` is always `false`; write-to-disk tools are a
+later phase behind an explicit enable flag). Linting only reads.
 
 | Tool | What it returns |
 | --- | --- |

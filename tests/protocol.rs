@@ -134,6 +134,8 @@ async fn tools_list_is_complete_and_sorted() {
             "list_formatters",
             "list_linters",
             "list_servers",
+            "run_format",
+            "run_lint",
         ]
     );
     for tool in tools {
@@ -248,6 +250,103 @@ async fn tools_call_unknown_tool_and_bad_arguments_are_tool_errors() {
         .as_str()
         .expect("text");
     assert!(text.contains("path"), "got: {text}");
+    client.finish().await;
+}
+
+#[tokio::test]
+async fn run_tools_round_trip_against_fake_editor() {
+    let socket = temp_socket("protocol-exec");
+    spawn_fake_editor(socket.clone(), Behavior::Normal);
+    let mut client = spawn_server(config_for(socket)).await;
+    initialize(&mut client).await;
+    let file = std::env::temp_dir().join("periscope-protocol-target.txt");
+    std::fs::write(&file, b"hello\n").expect("write target file");
+    for (id, name) in [(4, "run_format"), (5, "run_lint")] {
+        client
+            .send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                          "params": {"name": name,
+                                     "arguments": {"path": file.to_string_lossy()}}}))
+            .await;
+        let response = client.receive().await;
+        assert_eq!(
+            response["result"]["isError"],
+            json!(false),
+            "{name} against the fake editor: {response}"
+        );
+    }
+    client.finish().await;
+}
+
+#[tokio::test]
+async fn run_tools_reject_bad_arguments_before_any_editor_work() {
+    let socket = temp_socket("protocol-exec-validation");
+    spawn_fake_editor(socket.clone(), Behavior::Normal);
+    let mut client = spawn_server(config_for(socket)).await;
+    initialize(&mut client).await;
+    // Each of these must fail argument validation in the server
+    // itself, before any Lua is executed in the editor; a call that
+    // got past validation would return the fake editor's echo
+    // payload instead of a validation error.
+    let cases: Vec<(u64, JsonValue, &str)> = vec![
+        (
+            4,
+            json!({"name": "run_format", "arguments": {"path": "/nonexistent/x.rs"}}),
+            "path",
+        ),
+        (
+            5,
+            json!({"name": "run_format", "arguments": {
+                "path": "/etc/hostname", "formatters": []}}),
+            "empty",
+        ),
+        (
+            6,
+            json!({"name": "run_format", "arguments": {
+                "path": "/etc/hostname", "formatters": ["ok"], "lsp": "only"}}),
+            "conflicts",
+        ),
+        (
+            7,
+            json!({"name": "run_format", "arguments": {
+                "path": "/etc/hostname", "lsp": "sometimes"}}),
+            "lsp",
+        ),
+        (
+            8,
+            json!({"name": "run_lint", "arguments": {
+                "path": "/etc/hostname", "linters": ["bad name!"]}}),
+            "invalid name",
+        ),
+        (
+            9,
+            json!({"name": "run_lint", "arguments": {
+                "path": "/etc/hostname",
+                "linters": (0..33).map(|i| format!("linter{i}")).collect::<Vec<_>>()}}),
+            "at most",
+        ),
+    ];
+    for (id, params, needle) in cases {
+        client
+            .send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params}))
+            .await;
+        let response = client.receive().await;
+        assert_eq!(
+            response["result"]["isError"],
+            json!(true),
+            "case id {id}: {response}"
+        );
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("text");
+        assert!(
+            text.contains(needle),
+            "case id {id} should mention {needle:?}, got: {text}"
+        );
+        assert!(
+            !text.contains("echo"),
+            "case id {id} reached the editor: {text}"
+        );
+    }
     client.finish().await;
 }
 

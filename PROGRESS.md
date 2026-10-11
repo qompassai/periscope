@@ -53,3 +53,48 @@ MCP stdio front end + 10 read-only tools.
   primo copy at `~/scratch/periscope-src/`.
 - NOT wired into the live diver config: the `declared_servers`
   snippet is in the README for Matt to approve.
+
+## P2 — formatter/linter execution (2026-10-11, ~15:40 PDT)
+
+Tools added: `run_format`, `run_lint` (12 tools total).
+
+- `run_format` drives the config's own pipeline
+  (`require('formatters').format`, async=false, explicit timeout):
+  optional explicit formatter names (≤16, validated charset) and
+  LSP mode (fallback/never/only; names+only rejected Rust-side,
+  mirroring the module's own assert). Returns the module's status
+  verbatim (ok/unavailable/disabled/stale/error/timeout), `changed`,
+  the steps that ran, and the post-format buffer text (1 MB cap,
+  UTF-8-safe truncation). The pipeline applies to the brokered
+  editor's buffer only; the file on disk is never written
+  (`written: false` in every result; smoke verified sha256 of the
+  targets before/after).
+- `run_lint` drives `require('linters').run_linter` per linter
+  (manual mode, per-linter 50 s timeout, 60 s overall budget) and
+  reports the module's own on_complete contract: status, verified,
+  exit code, reason, and parsed diagnostics normalized to the P1
+  shape with `source` = the producing linter. Default selection is
+  the module's `linters_by_ft[filetype]` (+ `['*']`). A run that
+  reports 'stale' (buffer changed under it — his own pipelines
+  converge by re-running) is retried exactly once inside the same
+  budget.
+- Gates: sandbox + primo cargo test 18/18 (2 new protocol tests:
+  round-trip against the fake editor; six adversarial argument
+  cases rejected before any Lua runs); clippy -D warnings clean;
+  fmt clean; primo IDE gate 0 diagnostics.
+- Live smoke (primo, live config, managed mode): ugly.rs → rustfmt
+  applied, changed, correct text; repeat explicit run →
+  changed=false (idempotent); ugly.lua → stylua applied;
+  plain.txt with lsp=never → 'unavailable' with the module's own
+  message. dirty.lua default set → luacheck W211+W113 and selene
+  unused/undefined diagnostics, each attributed; broken.sh →
+  shellcheck ERRORs, exit 1; clean.sh → shellcheck ok/verified.
+  Bogus linter name → per-linter 'unavailable: linter is not
+  registered', not a crash.
+- Faithful-config notes: luacheck/shellcheck report
+  'unavailable: executable is not installed' when the broker is
+  spawned without ~/.local/bin on PATH (the MCP client's
+  environment decides; under diver it is complete). His shellcheck
+  adapter passes --severity=warning, so info-level SC2086 is
+  correctly not surfaced.
+- Binary reinstalled: primo ~/.local/bin/periscope (1,626,112 B).

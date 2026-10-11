@@ -511,6 +511,224 @@ return { attached_servers = attached_names(bufnr), symbols = out, truncated = tr
     )
 }
 
+/// Format one file with the config's own formatter pipeline
+/// (`require('formatters')`, the same entry point the editor's
+/// format-on-save and `:Format`-style flows use). The pipeline
+/// applies its result to the brokered editor's buffer; the file on
+/// disk is never written by this tool (`written` is always false).
+/// Arguments: path, formatter names (empty = the filetype's
+/// configured pipeline), LSP mode ('fallback' | 'never' | 'only'),
+/// attach grace ms, module timeout ms.
+pub fn run_format() -> String {
+    format!(
+        "{PRELUDE}{body}",
+        body = r"
+local path, names, lsp_mode, attach_grace_ms, timeout_ms = ...
+local bufnr = ensure_buffer(path)
+local filetype = vim.bo[bufnr].filetype
+local ok, formatters = pcall(require, 'formatters')
+if not ok then
+  return { error = 'formatters module failed to load: ' .. tostring(formatters), file = path, filetype = filetype, status = 'error', written = false }
+end
+if lsp_mode ~= 'never' and #names == 0 then
+  wait_attach(bufnr, attach_grace_ms)
+end
+local opts = {
+  async = false,
+  bufnr = bufnr,
+  notify = false,
+  timeout_ms = timeout_ms,
+}
+if #names > 0 then
+  opts.names = names
+end
+if lsp_mode ~= '' then
+  opts.lsp = lsp_mode
+end
+local job = formatters.format(opts)
+local steps = {}
+for _, step in ipairs(job.steps or {}) do
+  if type(step) == 'string' then
+    steps[#steps + 1] = step
+  elseif type(step) == 'table' and step.name then
+    steps[#steps + 1] = step.name
+  end
+end
+table.sort(steps)
+local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+local text = table.concat(lines, '\n')
+if #lines > 0 and vim.bo[bufnr].endofline then
+  text = text .. '\n'
+end
+local truncated = false
+if #text > 1000000 then
+  local cut = 1000000
+  while cut > 0 do
+    local byte = text:byte(cut)
+    if byte < 0x80 or byte >= 0xC0 then
+      break
+    end
+    cut = cut - 1
+  end
+  text = text:sub(1, cut)
+  truncated = true
+end
+return {
+  changed = job.changed == true,
+  error = type(job.error) == 'string' and job.error or nil,
+  file = path,
+  filetype = filetype,
+  formatters_applied = steps,
+  status = job.status or 'error',
+  text = text,
+  truncated = truncated,
+  written = false,
+}
+"
+    )
+}
+
+/// Lint one file with the config's own linter runner
+/// (`require('linters')`, the same runner its autocmd pipeline
+/// uses). Every selected linter runs through `M.run_linter` and
+/// reports through its `on_complete` contract: status, exit code,
+/// and the diagnostics it parsed — each diagnostic carrying its
+/// producing linter in `source`. Nothing is written to disk.
+/// Arguments: path, linter names (empty = the filetype's
+/// configured set), per-linter timeout ms, overall budget ms.
+pub fn run_lint() -> String {
+    format!(
+        "{PRELUDE}{body}",
+        body = r"
+local path, names, per_linter_timeout_ms, budget_ms = ...
+local bufnr = ensure_buffer(path)
+local filetype = vim.bo[bufnr].filetype
+local ok, linters = pcall(require, 'linters')
+if not ok then
+  return { completed = false, error = 'linters module failed to load: ' .. tostring(linters), file = path, filetype = filetype, results = {} }
+end
+if #names == 0 then
+  local seen, selected = {}, {}
+  local function add_all(list)
+    for _, name in ipairs(list or {}) do
+      if type(name) == 'string' and not seen[name] then
+        seen[name] = true
+        selected[#selected + 1] = name
+      end
+    end
+  end
+  local by_ft = linters.linters_by_ft or {}
+  add_all(by_ft[filetype])
+  add_all(by_ft['*'])
+  names = selected
+end
+table.sort(names)
+if #names == 0 then
+  return { completed = true, file = path, filetype = filetype, note = 'no linters configured for this filetype', results = {} }
+end
+local severity_names = { 'ERROR', 'WARN', 'INFO', 'HINT' }
+local results, by_name = {}, {}
+local retried = {}
+local function collect(result)
+  if by_name[result.name] and result.status ~= 'stale' then
+    return
+  end
+  if result.status == 'stale' and not retried[result.name] then
+    return
+  end
+  local diagnostics, truncated = {}, false
+  for index, entry in ipairs(result.diagnostics or {}) do
+    if index > 500 then
+      truncated = true
+      break
+    end
+    diagnostics[#diagnostics + 1] = {
+      character = entry.col,
+      code = entry.code ~= nil and tostring(entry.code) or nil,
+      end_character = entry.end_col,
+      end_line = entry.end_lnum,
+      line = entry.lnum,
+      message = entry.message,
+      severity = severity_names[entry.severity] or 'UNKNOWN',
+      source = entry.source or result.name,
+    }
+  end
+  local record = {
+    diagnostics = diagnostics,
+    exit_code = result.exit_code,
+    name = result.name,
+    reason = result.reason,
+    status = result.status or 'error',
+    truncated = truncated,
+    verified = result.verified == true,
+  }
+  by_name[result.name] = record
+  results[#results + 1] = record
+end
+local function run_one(name)
+  linters.run_linter(name, bufnr, {
+    automatic = false,
+    notify = false,
+    on_complete = collect,
+    timeout = per_linter_timeout_ms,
+  })
+end
+for _, name in ipairs(names) do
+  run_one(name)
+end
+local function settled()
+  for _, name in ipairs(names) do
+    if not by_name[name] then
+      return false
+    end
+  end
+  return true
+end
+local deadline = vim.uv.now() + budget_ms
+local function wait_settled()
+  local remaining = deadline - vim.uv.now()
+  if remaining <= 0 then
+    return settled()
+  end
+  return vim.wait(remaining, settled, 100)
+end
+wait_settled()
+-- A run that reports 'stale' lost a race with the buffer changing
+-- under it (the editor's own pipelines converge by running again).
+-- Retry each stale linter exactly once inside the same budget.
+local stale_names = {}
+for _, name in ipairs(names) do
+  if not by_name[name] then
+    stale_names[#stale_names + 1] = name
+  end
+end
+if #stale_names > 0 and vim.uv.now() < deadline then
+  vim.wait(300)
+  for _, name in ipairs(stale_names) do
+    retried[name] = true
+    run_one(name)
+  end
+  wait_settled()
+end
+local completed = settled()
+table.sort(results, function(a, b) return a.name < b.name end)
+local missing = {}
+for _, name in ipairs(names) do
+  if not by_name[name] then
+    missing[#missing + 1] = name
+  end
+end
+return {
+  completed = completed and #missing == 0,
+  file = path,
+  filetype = filetype,
+  missing = missing,
+  results = results,
+}
+"
+    )
+}
+
 /// Every snippet the server can execute, for the syntax gate in tests.
 pub fn all_snippets() -> Vec<String> {
     vec![
@@ -524,5 +742,7 @@ pub fn all_snippets() -> Vec<String> {
         definition(),
         references(),
         document_symbols(),
+        run_format(),
+        run_lint(),
     ]
 }

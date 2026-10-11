@@ -1,10 +1,13 @@
 //! The MCP tool surface: definitions and dispatch.
 //!
-//! Every tool is read-only intelligence over the brokered editor:
-//! nothing here edits a buffer, writes a file, or runs a formatter.
-//! (Write-class tools belong to a later phase behind an explicit
-//! enable flag.) Positions follow the LSP convention throughout:
-//! 0-based lines, character offsets in UTF-16 code units.
+//! The `get_*` and `list_*` tools are read-only intelligence over the
+//! brokered editor. The `run_*` tools execute the config's own
+//! formatter and linter pipelines inside the editor: formatting is
+//! applied to the editor's buffer only (never written to disk —
+//! write-class tools belong to a later phase behind an explicit
+//! enable flag), and linting only reads. Positions follow the LSP
+//! convention throughout: 0-based lines, character offsets in
+//! UTF-16 code units.
 //!
 //! All path arguments are validated before any Lua runs: the target
 //! must exist, be a regular file, and be valid UTF-8.
@@ -24,6 +27,22 @@ const ATTACH_BUDGET_MS: u64 = 20_000;
 const REQUEST_BUDGET_MS: u64 = 30_000;
 /// Budget for diagnostics to settle after attach.
 const SETTLE_BUDGET_MS: u64 = 5_000;
+/// Grace for a language server to attach before a format call, so
+/// the pipeline's LSP fallback has a client to work with.
+const FORMAT_ATTACH_GRACE_MS: u64 = 5_000;
+/// Overall budget for one formatter or linter execution call.
+const EXEC_BUDGET_MS: u64 = 60_000;
+/// Deadline handed to the formatter pipeline itself, inside the
+/// execution budget so the editor can report its own timeout.
+const FORMAT_TIMEOUT_MS: u64 = 55_000;
+/// Per-linter deadline handed to the linter runner.
+const LINT_TIMEOUT_MS: u64 = 50_000;
+/// Most formatter names accepted in one run_format call.
+const FORMATTER_NAMES_MAX: usize = 16;
+/// Most linter names accepted in one run_lint call.
+const LINTER_NAMES_MAX: usize = 32;
+/// Longest accepted formatter/linter name.
+const TOOL_NAME_MAX_BYTES: usize = 64;
 /// Slack added to Lua-side budgets to form the RPC deadline.
 const RPC_SLACK_MS: u64 = 10_000;
 /// Largest accepted line argument (sanity bound, not a file limit).
@@ -118,6 +137,40 @@ pub fn definitions() -> JsonValue {
             "name": "list_servers",
             "description": "Every language server the editor config defines, plus the clients active in the editor right now.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
+            "name": "run_format",
+            "description": "Format one file with the editor config's own formatter pipeline and return the result. The formatted text is applied to the brokered editor's buffer and returned in `text`; the file on disk is never written (`written` is always false). With no `formatters`, the filetype's configured pipeline runs (including the pipeline's LSP fallback unless `lsp` is 'never').",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": path_property,
+                    "formatters": {
+                        "type": "array", "items": { "type": "string" },
+                        "description": "Explicit formatter names to run, in order. Omit for the filetype's configured pipeline."
+                    },
+                    "lsp": {
+                        "type": "string", "enum": ["fallback", "never", "only"],
+                        "description": "The pipeline's LSP mode. 'only' cannot be combined with explicit `formatters`."
+                    }
+                },
+                "required": ["path"], "additionalProperties": false
+            }
+        },
+        {
+            "name": "run_lint",
+            "description": "Lint one file with the editor config's own linter runner and return per-linter results: status, exit code, and the diagnostics each linter produced (every diagnostic names its linter in `source`). With no `linters`, the filetype's configured set runs. Nothing is written to disk.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": path_property,
+                    "linters": {
+                        "type": "array", "items": { "type": "string" },
+                        "description": "Explicit linter names to run. Omit for the filetype's configured set."
+                    }
+                },
+                "required": ["path"], "additionalProperties": false
+            }
         }
     ])
 }
@@ -229,6 +282,40 @@ pub async fn call(
                 .exec_lua(lua::SERVERS, Vec::new(), RPC_SLACK_MS)
                 .await
         }
+        "run_format" => {
+            let path = path_arg(args)?;
+            let formatters = names_arg(args, "formatters", FORMATTER_NAMES_MAX)?;
+            let lsp_mode = lsp_mode_arg(args, !formatters.is_empty())?;
+            broker
+                .exec_lua(
+                    &lua::run_format(),
+                    vec![
+                        json!(path),
+                        json!(formatters),
+                        json!(lsp_mode),
+                        json!(FORMAT_ATTACH_GRACE_MS),
+                        json!(FORMAT_TIMEOUT_MS),
+                    ],
+                    FORMAT_ATTACH_GRACE_MS + EXEC_BUDGET_MS + RPC_SLACK_MS,
+                )
+                .await
+        }
+        "run_lint" => {
+            let path = path_arg(args)?;
+            let linters = names_arg(args, "linters", LINTER_NAMES_MAX)?;
+            broker
+                .exec_lua(
+                    &lua::run_lint(),
+                    vec![
+                        json!(path),
+                        json!(linters),
+                        json!(LINT_TIMEOUT_MS),
+                        json!(EXEC_BUDGET_MS),
+                    ],
+                    EXEC_BUDGET_MS + RPC_SLACK_MS,
+                )
+                .await
+        }
         _ => Err(Error::InvalidInput(format!("unknown tool: {name}"))),
     }
 }
@@ -272,6 +359,75 @@ fn position_args(args: &JsonValue) -> Result<(String, u64, u64)> {
     let line = bounded_u64(args, "line", LINE_MAX)?;
     let character = bounded_u64(args, "character", CHARACTER_MAX)?;
     Ok((path, line, character))
+}
+
+/// Validate an optional list of formatter/linter names: an array of
+/// at most `max` strings, each 1..=64 bytes of `[A-Za-z0-9._-]`.
+/// Returns the names sorted and deduplicated for deterministic
+/// editor-side behavior; an absent argument yields an empty list
+/// (the editor then uses the filetype's configured set).
+fn names_arg(args: &JsonValue, key: &str, max: usize) -> Result<Vec<String>> {
+    let Some(value) = args.get(key) else {
+        return Ok(Vec::new());
+    };
+    let items = value
+        .as_array()
+        .ok_or_else(|| Error::InvalidInput(format!("argument {key} must be an array")))?;
+    if items.is_empty() {
+        return Err(Error::InvalidInput(format!(
+            "argument {key} must not be empty when provided"
+        )));
+    }
+    if items.len() > max {
+        return Err(Error::InvalidInput(format!(
+            "argument {key} accepts at most {max} names, got {}",
+            items.len()
+        )));
+    }
+    let mut names: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        let name = item.as_str().ok_or_else(|| {
+            Error::InvalidInput(format!("argument {key} entries must be strings"))
+        })?;
+        if name.is_empty()
+            || name.len() > TOOL_NAME_MAX_BYTES
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(Error::InvalidInput(format!(
+                "invalid name in argument {key}: {name:?}"
+            )));
+        }
+        names.push(name.to_string());
+    }
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+/// Validate the optional formatter LSP mode. Mirrors the formatter
+/// pipeline's own contract: explicit formatter names conflict with
+/// `lsp = "only"`. Returns "" when unspecified (the pipeline's
+/// configured default then applies).
+fn lsp_mode_arg(args: &JsonValue, has_names: bool) -> Result<String> {
+    let Some(value) = args.get("lsp") else {
+        return Ok(String::new());
+    };
+    let mode = value
+        .as_str()
+        .ok_or_else(|| Error::InvalidInput("argument lsp must be a string".to_string()))?;
+    if !matches!(mode, "fallback" | "never" | "only") {
+        return Err(Error::InvalidInput(format!(
+            "argument lsp must be fallback, never, or only: {mode:?}"
+        )));
+    }
+    if has_names && mode == "only" {
+        return Err(Error::InvalidInput(
+            "argument lsp=only conflicts with explicit formatters".to_string(),
+        ));
+    }
+    Ok(mode.to_string())
 }
 
 fn bounded_u64(args: &JsonValue, key: &str, max: u64) -> Result<u64> {
