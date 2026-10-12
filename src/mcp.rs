@@ -25,6 +25,9 @@ struct State {
     broker: Option<NvimBroker>,
     broker_config: BrokerConfig,
     initialized: bool,
+    /// The `clientInfo.name` from `initialize`: the transport identity
+    /// attention publishes are bound to (anti-spoofing).
+    client_name: Option<String>,
 }
 
 /// Run the server until stdin reaches EOF, then shut the broker down.
@@ -39,6 +42,7 @@ where
         broker: None,
         broker_config,
         initialized: false,
+        client_name: None,
     };
     loop {
         let Some(line) = read_line_bounded(&mut reader).await else {
@@ -156,6 +160,11 @@ async fn dispatch(
     match method {
         "initialize" => {
             state.initialized = true;
+            state.client_name = params
+                .get("clientInfo")
+                .and_then(|info| info.get("name"))
+                .and_then(JsonValue::as_str)
+                .map(str::to_owned);
             let requested = params
                 .get("protocolVersion")
                 .and_then(JsonValue::as_str)
@@ -201,6 +210,18 @@ async fn call_tool(state: &mut State, params: &JsonValue) -> JsonValue {
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    // Attention tools are served from the in-process coordination
+    // board; they never touch the editor, so they are dispatched
+    // before the broker connection is opened.
+    if name.starts_with("attention_") {
+        return match crate::attention::call(state.client_name.as_deref(), name, &arguments) {
+            Ok(result) => json!({
+                "content": [{"type": "text", "text": result.to_string()}],
+                "isError": false,
+            }),
+            Err(error) => tool_error(&error.to_string()),
+        };
+    }
     if state.broker.is_none() {
         match NvimBroker::connect(state.broker_config.clone()).await {
             Ok(broker) => state.broker = Some(broker),

@@ -64,7 +64,50 @@ pub fn definitions() -> JsonValue {
         "type": "integer", "minimum": 0,
         "description": "0-based character offset in UTF-16 code units (the LSP convention)."
     });
+    let agent_id_property = json!({
+        "type": "string",
+        "description": "The partner agent whose advertised focus to read or compare against."
+    });
     json!([
+        {
+            "name": "attention_alignment",
+            "description": "Alignment between your published focus and a partner agent's focus, measured only inside one saliency snapshot frame (Jaccard overlap, shared targets, shared top). Refused across frames.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "agent_id": agent_id_property },
+                "required": ["agent_id"], "additionalProperties": false
+            }
+        },
+        {
+            "name": "attention_decide",
+            "description": "Coordination decision against a partner agent's focus: parallel (no contention), serialize (same top target — the named holder proceeds, you defer), or reject (stale frame or invalid focus — re-snapshot, never guess).",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "agent_id": agent_id_property },
+                "required": ["agent_id"], "additionalProperties": false
+            }
+        },
+        {
+            "name": "attention_focus",
+            "description": "Read a partner agent's currently advertised focus (ordered salient targets + the saliency snapshot hash it was computed from) from the coordination board.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "agent_id": agent_id_property },
+                "required": ["agent_id"], "additionalProperties": false
+            }
+        },
+        {
+            "name": "attention_publish",
+            "description": "Publish your attention focus to the coordination board. The focus document's agent_id must equal your client identity; sequences must strictly advance. Bounded: at most 8 targets.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "focus": {
+                    "type": "object",
+                    "description": "A focus document: {agent_id, snapshot_hash, seq, targets[]} — ordered salient targets, most salient first."
+                } },
+                "required": ["focus"], "additionalProperties": false
+            }
+        },
         {
             "name": "broker_status",
             "description": "Report the broker mode (managed or attached), the editor version, its config root, and its working directory.",
