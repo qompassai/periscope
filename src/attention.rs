@@ -269,15 +269,14 @@ pub fn call(caller: Option<&str>, name: &str, args: &JsonValue) -> Result<JsonVa
     let caller = caller.ok_or_else(|| {
         Error::InvalidInput("attention tools require an identified client".to_string())
     })?;
-    let board = board().lock().expect("attention board lock");
+    let mut board = board().lock().expect("attention board lock");
     match name {
         "attention_publish" => {
             let raw = args.get("focus").ok_or_else(|| {
                 Error::InvalidInput("attention_publish requires a `focus` argument".to_string())
             })?;
-            let focus: Focus = serde_json::from_value(raw.clone()).map_err(|error| {
-                Error::InvalidInput(format!("invalid focus document: {error}"))
-            })?;
+            let focus: Focus = serde_json::from_value(raw.clone())
+                .map_err(|error| Error::InvalidInput(format!("invalid focus document: {error}")))?;
             let seq = focus.seq;
             board.publish(caller, focus)?;
             Ok(json!({"status": "ok", "agent_id": caller, "seq": seq}))
@@ -291,13 +290,9 @@ pub fn call(caller: Option<&str>, name: &str, args: &JsonValue) -> Result<JsonVa
         }
         "attention_alignment" => {
             let partner = required_agent_id(args)?;
-            let score = board
-                .alignment_between(caller, partner)
-                .ok_or_else(|| {
-                    Error::InvalidInput(
-                        "both agents must publish a focus before alignment".to_string(),
-                    )
-                })??;
+            let score = board.alignment_between(caller, partner).ok_or_else(|| {
+                Error::InvalidInput("both agents must publish a focus before alignment".to_string())
+            })??;
             Ok(json!({
                 "status": "ok",
                 "alignment": serde_json::to_value(score).expect("alignment serialises"),
@@ -394,8 +389,16 @@ mod tests {
         assert!(board.publish("mallory", alice.clone()).is_err());
         board.publish("alice", alice).expect("honest publish");
         // Replay: same or lower sequence.
-        assert!(board.publish("alice", focus("alice", "h", 1, &["y"])).is_err());
-        assert!(board.publish("alice", focus("alice", "h", 0, &["y"])).is_err());
+        assert!(
+            board
+                .publish("alice", focus("alice", "h", 1, &["y"]))
+                .is_err()
+        );
+        assert!(
+            board
+                .publish("alice", focus("alice", "h", 0, &["y"]))
+                .is_err()
+        );
         // Flood: over the target bound.
         let wide: Vec<String> = (0..=FOCUS_TARGETS_MAX).map(|i| format!("t{i}")).collect();
         let flood = Focus {
@@ -413,7 +416,10 @@ mod tests {
             full.publish(&id, focus(&id, "h", 1, &["x"]))
                 .expect("within capacity");
         }
-        assert!(full.publish("agent-new", focus("agent-new", "h", 1, &["x"])).is_err());
+        assert!(
+            full.publish("agent-new", focus("agent-new", "h", 1, &["x"]))
+                .is_err()
+        );
         full.publish("agent-0", focus("agent-0", "h", 2, &["z"]))
             .expect("tracked agents still update a full board");
     }

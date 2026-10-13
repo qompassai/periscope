@@ -124,6 +124,10 @@ async fn tools_list_is_complete_and_sorted() {
     assert_eq!(
         names,
         [
+            "attention_alignment",
+            "attention_decide",
+            "attention_focus",
+            "attention_publish",
             "broker_status",
             "get_definition",
             "get_diagnostics",
