@@ -98,3 +98,44 @@ Tools added: `run_format`, `run_lint` (12 tools total).
   adapter passes --severity=warning, so info-level SC2086 is
   correctly not surfaced.
 - Binary reinstalled: primo ~/.local/bin/periscope (1,626,112 B).
+
+## Closeout audit (2026-10-12 overnight)
+
+- Wiring state (corrects the Slice-1 "State" note above): periscope
+  IS wired into the live diver config, and the entry was mirrored to
+  the diver repo at `f823811f` (2026-10-11, on Matt's "move it");
+  Matt validated tools/list and tools/call firsthand, in the terminal
+  and in Neovim. The installed primo binary is still the P2 build
+  (1,626,112 B, 12 broker tools).
+- MATE attention extension (`8220510`, 2026-10-12): vendored
+  joint-attention board + the four `attention_*` tools (16 total).
+  NOT landed: that build is not installed on primo. Installing it
+  changes the live surface from 12 to 16 tools and remains a separate
+  decision, as `8220510`'s own message reserved.
+- Defects found by this audit — the committed tree did not pass its
+  own gates: (1) `src/attention.rs` did not compile: the board lock in
+  `attention::call` was not bound `mut` while
+  `FocusBoard::publish` takes `&mut self` (E0596); (2)
+  `cargo fmt --check` failed on `src/attention.rs`; (3)
+  `tests/protocol.rs` `tools_list_is_complete_and_sorted` still
+  expected the 12 broker tools; (4) the README lacked the
+  `run_format`/`run_lint` rows (an edit left uncommitted in both
+  working trees) and any attention documentation, and its
+  security-posture paragraph still claimed a read-only v0.1 that
+  "never formats"; (5) this record's state picture stopped at P2.
+- Fixes (the closeout commit after `8220510`): the `mut` binding;
+  `cargo fmt`; the protocol expectation extended to the sorted 16;
+  README completed (P2 rows, attention rows + board paragraph,
+  security posture corrected); this section.
+- Gates after the fix, on BOTH machines (sandbox + primo
+  `~/workspace/periscope-mate`, whose attention sources are
+  byte-identical to the sandbox commit): `cargo fmt --check` clean;
+  `cargo clippy --all-targets -- -D warnings` clean; `cargo test`
+  22/22 (4 lib + 5 broker + 1 lua-syntax + 12 protocol). Hermetic
+  stdio smoke: initialize → tools/list returns the 16 sorted names;
+  attention publish/focus round-trips with no editor involved; a
+  publish spoofing another agent_id is refused in-band.
+- Copies: the sandbox repo is canonical and local-only (no remote is
+  configured — there is nothing to push). primo-mate's uncommitted
+  attention WIP was the origin of `8220510` and now carries the same
+  fixed files, hash-verified.

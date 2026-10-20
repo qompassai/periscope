@@ -11,6 +11,7 @@
 //! and debug setup. Slice 1 is read-only: status, registry listings,
 //! diagnostics, hover, definition, references, and document symbols.
 
+pub mod attention;
 pub mod broker;
 pub mod codec;
 pub mod error;
