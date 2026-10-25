@@ -139,3 +139,23 @@ Tools added: `run_format`, `run_lint` (12 tools total).
   configured — there is nothing to push). primo-mate's uncommitted
   attention WIP was the origin of `8220510` and now carries the same
   fixed files, hash-verified.
+
+## 2026-10-25 — managed editor can no longer be orphaned
+
+- Incident: five managed editors (spawned 2026-10-20/21) were found
+  still listening on their sockets days later, reparented to init.
+  The graceful shutdown path reaped correctly; a broker that died
+  ungracefully (SIGKILL, host-process teardown, a killed tmux
+  session) took no cleanup path, and the child had no reason to die.
+- Fix (src/broker.rs, spawn_editor): the editor is spawned under
+  `setpriv --pdeathsig TERM`, so the kernel SIGTERMs it when the
+  broker dies for any reason, and the tokio Child is now
+  kill_on_drop as the second layer. The crate forbids unsafe code,
+  so the death signal is armed across exec by setpriv(1) instead of
+  a pre_exec prctl. The spawn error context names setpriv.
+- Gates: `cargo fmt --check` clean; `cargo clippy --all-targets --
+  -D warnings` clean; `cargo test` 22/22 — on primo periscope-mate
+  and the sandbox canonical repo alike. Live proof on primo with the
+  installed binary: a broker_status call spawned the editor,
+  `kill -9` on the broker, and the editor exited on the death
+  signal and removed its own socket.
