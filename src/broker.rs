@@ -36,6 +36,8 @@ const CONNECT_DEADLINE_MS: u64 = 10_000;
 const HANDSHAKE_TIMEOUT_MS: u64 = 5_000;
 /// Budget for the managed editor to finish startup (VimEnter).
 const READY_DEADLINE_MS: u64 = 20_000;
+/// Parent-death wrapper for the managed editor spawn (util-linux).
+const SETPRIV_BIN: &str = "/usr/bin/setpriv";
 /// Grace period for the managed child to exit before it is killed.
 const SHUTDOWN_GRACE_MS: u64 = 2_000;
 /// Poll interval while waiting for the socket or for startup.
@@ -298,17 +300,29 @@ async fn spawn_editor(config: &BrokerConfig) -> Result<(PathBuf, tokio::process:
         context: "creating the editor log file",
         detail: error.to_string(),
     })?;
-    let mut command = tokio::process::Command::new(&config.nvim_bin);
+    // The editor must never outlive this broker, so it is spawned
+    // under setpriv's parent-death signal: when this process dies for
+    // any reason (SIGKILL, host-process teardown, a killed tmux
+    // session), the kernel sends the editor SIGTERM, which it handles
+    // cleanly. The crate forbids unsafe code, so the signal is armed
+    // by setpriv across exec instead of a pre_exec prctl. kill_on_drop
+    // is the second layer, covering orderly drops of the Child handle.
+    // Before this, a broker that died ungracefully left its editor
+    // listening on the socket indefinitely, reparented to init.
+    let mut command = tokio::process::Command::new(SETPRIV_BIN);
     command
+        .args(["--pdeathsig", "TERM", "--"])
+        .arg(&config.nvim_bin)
         .args(["--headless", "--listen"])
         .arg(&socket_path)
         .args(["-n", "-i", "NONE", "--cmd", "set noexrc"])
         .current_dir(&config.workspace)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::from(log_file));
+        .stderr(std::process::Stdio::from(log_file))
+        .kill_on_drop(true);
     let child = command.spawn().map_err(|error| Error::Io {
-        context: "spawning neovim (is it on PATH?)",
+        context: "spawning neovim via setpriv (is setpriv installed?)",
         detail: error.to_string(),
     })?;
     Ok((socket_path, child))
