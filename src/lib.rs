@@ -15,6 +15,7 @@ pub mod attention;
 pub mod broker;
 pub mod codec;
 pub mod error;
+pub mod guard;
 pub mod lua;
-pub mod mcp;
+pub mod server;
 pub mod tools;
