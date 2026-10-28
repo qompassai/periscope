@@ -21,6 +21,9 @@ pub fn temp_socket(tag: &str) -> PathBuf {
 }
 
 /// A broker config that attaches to the given (fake) editor socket.
+/// Not every test binary uses it (the protocol suite drives the
+/// compiled binary instead of the library now).
+#[allow(dead_code)]
 pub fn config_for(socket: PathBuf) -> BrokerConfig {
     BrokerConfig {
         attach_socket: Some(socket),
