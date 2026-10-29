@@ -1,9 +1,20 @@
 [package]
-name = "periscope"
+name = "periscope-mcp"
 version = "0.2.0"
 edition = "2024"
 description = "MCP server that brokers into a Neovim instance running the user's own config, exposing its LSP clients, formatter/linter registries, DAP setup, and more as MCP tools."
 license = "Apache-2.0"
+
+# D-299: the crates.io package is periscope-mcp (the bare name is
+# held by another publisher); the library and binary keep the
+# short name, matching the slipway-mcp estate pattern.
+[lib]
+name = "periscope"
+path = "src/lib.rs"
+
+[[bin]]
+name = "periscope"
+path = "src/main.rs"
 
 [dependencies]
 # WS2 (D-113): framing moves to the official Rust MCP SDK, modern era
