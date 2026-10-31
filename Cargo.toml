@@ -1,6 +1,6 @@
 [package]
 name = "periscope-mcp"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2024"
 description = "MCP server that brokers into a Neovim instance running the user's own config, exposing its LSP clients, formatter/linter registries, DAP setup, and more as MCP tools."
 license = "Apache-2.0"

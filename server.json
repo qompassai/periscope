@@ -22,7 +22,7 @@
   "packages": [
     {
       "fileSha256": "e89eaaedb868ca7825f2d1247608dc74c35911b88d33ff633e2857a6b63952bc",
-      "identifier": "https://github.com/qompassai/periscope/releases/download/v0.1.0/periscope-mcp-0.1.0-linux-x64.mcpb",
+      "identifier": "https://github.com/qompassai/periscope/releases/download/v1.0.0/periscope-mcp-1.0.0-linux-x64.mcpb",
       "registryType": "mcpb",
       "transport": {
         "type": "stdio"
@@ -34,6 +34,6 @@
     "url": "https://github.com/qompassai/periscope"
   },
   "title": "Periscope",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "websiteUrl": "https://qompass.ai/solutions/periscope/"
 }
