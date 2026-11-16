@@ -1,0 +1,15 @@
+[package]
+name = "periscope-tui"
+version = "0.1.0"
+edition = "2024"
+description = "Fleet-pattern TUI for periscope: Neovim-broker console (attached-editor state, LSP/formatter/linter/DAP tree, workflow runs)."
+license = "Apache-2.0"
+
+[dependencies]
+# crossterm: terminal backend + key events for the full-screen loop.
+crossterm = "0.29"
+# ratatui: pure widget rendering; tests render through TestBackend.
+ratatui = "0.30"
+# serde_json: the facade speaks serde_json::Value end to end, exactly
+# like the phlow-tui pattern this crate replicates.
+serde_json = "1.0"
