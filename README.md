@@ -1,5 +1,6 @@
 # Periscope
 [![MCP Registry](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0%2Fservers%2Fai.qompass%252Fperiscope%2Fversions&query=%24.servers%5B0%5D.server.version&label=MCP%20Registry)](https://registry.modelcontextprotocol.io/v0/servers/ai.qompass%2Fperiscope/versions)
+mcp-name: ai.qompass/periscope
 
 An MCP server that brokers to a real Neovim running your actual diver
 config, so MCP clients (agents) query the same language servers,

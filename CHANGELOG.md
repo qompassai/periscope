@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0 — 2026-11-27
+
+- First publication to the MCP Registry as `ai.qompass/periscope` (Registry onboarding scoped by the release sweep record, ~/workspace/release-sweep-20261127/RECORD.md, held item 7). server.json package surface is now the cargo entry (`periscope-mcp` 1.1.0, stdio): the MCPB bundle entry's fileSha256 still named the 0.1.0 bundle (noted in the 1.0.0 entry below), so it is retired rather than carried forward stale.
+- README gains the `mcp-name: ai.qompass/periscope` ownership marker the Registry verifies against the crates.io package.
+- No tool-surface or behaviour change from 1.0.0.
+
 ## 1.0.0 — 2026-10-31
 
 - rmcp modern-only migration landed (rmcp 3.8.0, protocol 2026-07-28; WS2-W2 gate pass).
