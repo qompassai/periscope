@@ -28,3 +28,7 @@ tokio = { version = "1.47", features = ["io-std", "io-util", "macros", "net", "p
 
 [profile.release]
 lto = "thin"
+
+[[bench]]
+name = "hot_paths"
+harness = false
